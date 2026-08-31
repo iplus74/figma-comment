@@ -1,0 +1,258 @@
+/* style.css - Vanilla CSS, 프레임워크 미사용 */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  background: #f4f5f7;
+  color: #172b4d;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: #7b61ff;
+  color: #fff;
+}
+
+.app-title {
+  font-size: 18px;
+  margin: 0;
+}
+
+.app-nav .nav-btn {
+  margin-left: 8px;
+  background: #dfe1e6;
+  color: #172b4d;
+}
+
+.app-nav .nav-btn:hover {
+  background: #c1c7d0;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: 3px;
+  padding: 8px 14px;
+  background: #7b61ff;
+  color: #fff;
+  font-size: 14px;
+}
+
+button:hover {
+  background: #6a4ff0;
+}
+
+button:disabled {
+  background: #a5adba;
+  cursor: not-allowed;
+}
+
+.app-main {
+  flex: 1;
+  overflow: auto;
+  padding: 20px;
+}
+
+.screen.hidden {
+  display: none;
+}
+
+.search-form,
+.settings-form {
+  display: flex;
+  gap: 16px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  background: #fff;
+  padding: 16px;
+  border: 1px solid #dfe1e6;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+.settings-form {
+  flex-direction: column;
+  align-items: stretch;
+  max-width: 480px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  color: #42526e;
+  gap: 4px;
+}
+
+input,
+select,
+textarea {
+  padding: 8px;
+  border: 1px solid #dfe1e6;
+  border-radius: 3px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.status-msg {
+  font-size: 13px;
+  color: #6b778c;
+  margin-top: 8px;
+  min-height: 18px;
+}
+
+.status-msg.error {
+  color: #de350b;
+}
+
+.status-msg.success {
+  color: #00875a;
+}
+
+.comment-list,
+.thread-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.comment-item {
+  background: #fff;
+  border: 1px solid #dfe1e6;
+  border-radius: 6px;
+  padding: 12px 16px;
+  cursor: pointer;
+}
+
+.comment-item:hover {
+  background: #f4f5f7;
+  border-color: #0052cc;
+}
+
+.comment-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #6b778c;
+  margin-bottom: 6px;
+}
+
+.comment-author {
+  font-weight: 600;
+  color: #172b4d;
+}
+
+.comment-message {
+  font-size: 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.detail-toolbar {
+  margin-bottom: 16px;
+}
+
+#btn-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  line-height: 1;
+  background: #dfe1e6;
+  color: #172b4d;
+}
+
+#btn-back:hover {
+  background: #c1c7d0;
+}
+
+.detail-body {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.design-preview,
+.thread-panel {
+  background: #fff;
+  border: 1px solid #dfe1e6;
+  border-radius: 6px;
+  padding: 16px;
+  flex: 1;
+  min-width: 320px;
+}
+
+.design-image-wrap {
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f4f5f7;
+  border-radius: 3px;
+}
+
+.design-image-inner {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
+.design-image {
+  max-width: 100%;
+  border-radius: 6px;
+}
+
+.design-pin {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  margin-top: -8px;
+  background: #ef4444;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.thread-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.thread-list .comment-item {
+  cursor: default;
+}
+
+.thread-list .comment-item.self {
+  border: 2px solid #0052cc;
+}
+
+.reply-form {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hidden {
+  display: none !important;
+}

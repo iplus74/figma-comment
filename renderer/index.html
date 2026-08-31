@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline';" />
+  <title>Figma Comment Viewer</title>
+  <link rel="icon" href="icon.svg" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1 class="app-title">Figma Comment Viewer</h1>
+    <nav class="app-nav">
+      <button id="btn-nav-list" class="nav-btn" data-screen="list">댓글 목록</button>
+      <button id="btn-nav-settings" class="nav-btn" data-screen="settings">설정</button>
+    </nav>
+  </header>
+
+  <main class="app-main">
+    <!-- 댓글 목록 화면 -->
+    <section id="screen-list" class="screen">
+      <form id="search-form" class="search-form">
+        <label>
+          종류
+          <select id="search-type">
+            <option value="mention">나를 맨션한 댓글</option>
+            <option value="mine">내가 쓴 댓글</option>
+          </select>
+        </label>
+        <label>
+          최대 개수
+          <input type="number" id="search-max-num" min="1" max="500" value="50" />
+        </label>
+        <label>
+          키워드
+          <input type="text" id="search-keyword" placeholder="키워드 입력" />
+        </label>
+        <button type="submit" id="btn-search">조회</button>
+      </form>
+      <div id="list-status" class="status-msg"></div>
+      <ul id="comment-list" class="comment-list"></ul>
+    </section>
+
+    <!-- 댓글 상세 화면 -->
+    <section id="screen-detail" class="screen hidden">
+      <div class="detail-toolbar">
+        <button id="btn-back"><span aria-hidden="true">←</span><span>이전</span></button>
+      </div>
+      <div class="detail-body">
+        <div class="design-preview">
+          <h2>디자인 미리보기</h2>
+          <div id="design-image-wrap" class="design-image-wrap">
+            <div id="design-status" class="status-msg">노드에 연결된 이미지가 없습니다.</div>
+            <div id="design-image-inner" class="design-image-inner hidden">
+              <img id="design-image" class="design-image" alt="design preview" />
+              <div id="design-pin" class="design-pin hidden" title="댓글 위치"></div>
+            </div>
+          </div>
+        </div>
+        <div class="thread-panel">
+          <h2>쓰레드</h2>
+          <ul id="thread-list" class="thread-list"></ul>
+          <form id="reply-form" class="reply-form">
+            <textarea id="reply-input" placeholder="답글을 입력하세요" rows="3"></textarea>
+            <button type="submit" id="btn-reply">답글 전송</button>
+            <div id="reply-status" class="status-msg"></div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- 설정 화면 -->
+    <section id="screen-settings" class="screen hidden">
+      <form id="settings-form" class="settings-form">
+        <label>
+          Figma Personal Access Token
+          <input type="password" id="settings-token" placeholder="figd_..." autocomplete="off" />
+        </label>
+        <label>
+          File Key
+          <input type="text" id="settings-file-key" placeholder="예: abcDEF123456" />
+        </label>
+        <div class="settings-actions">
+          <button type="button" id="btn-test-connection">연결 테스트</button>
+          <button type="submit" id="btn-save-settings">저장</button>
+        </div>
+        <div id="settings-status" class="status-msg"></div>
+      </form>
+    </section>
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
