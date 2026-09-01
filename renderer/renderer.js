@@ -10,9 +10,11 @@ const state = {
   currentUser: null, // { id, handle, ... }
   comments: [], // 마지막으로 조회한 전체 댓글 목록 (파일 전체)
   selectedRootId: null,
+  selectedCommentId: null, // 사용자가 선택한 특정 댓글/답글 id
   previewRequestId: 0,
   imageCache: new Map(), // nodeId -> 이미지 URL 캐시
   selectedNodeId: null, // 현재 미리보기 중인 노드 id
+  fileName: null, // Figma 파일 이름
 };
 
 // ---------- 화면 전환 ----------
@@ -201,6 +203,41 @@ const designImageEl = document.getElementById('design-image');
 const designImageInnerEl = document.getElementById('design-image-inner');
 const designPinEl = document.getElementById('design-pin');
 const designStatusEl = document.getElementById('design-status');
+const btnOpenFigma = document.getElementById('btn-open-figma');
+
+function generateFigmaShareToken() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < 16; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return `${result}-0`;
+}
+
+// Figma 상세보기 버튼을 클릭하면 기본 브라우저(Chrome 등)로 해당 Figma 댓글 쓰레드 링크를 연다.
+btnOpenFigma.addEventListener('click', () => {
+  const fileKey = getFileKey();
+  if (!fileKey) {
+    setStatus(designStatusEl, 'File Key가 설정되지 않았습니다.', 'error');
+    return;
+  }
+  const nodeId = state.selectedNodeId;
+  const commentId = state.selectedCommentId || state.selectedRootId;
+  const fileNameSlug = state.fileName
+    ? `/${encodeURIComponent(state.fileName.trim().replace(/\s+/g, '-'))}`
+    : '';
+
+  const params = new URLSearchParams();
+  if (nodeId) {
+    params.set('node-id', nodeId.replace(':', '-'));
+  }
+  params.set('t', generateFigmaShareToken());
+
+  const queryString = params.toString();
+  const hash = commentId ? `#${encodeURIComponent(commentId)}` : '';
+  const url = `https://www.figma.com/design/${encodeURIComponent(fileKey)}${fileNameSlug}?${queryString}${hash}`;
+  window.figmaAPI.openExternal(url);
+});
 
 // 미리보기 이미지를 클릭하면 scale 1 원본을 새 창으로 열다.
 designImageEl.style.cursor = 'zoom-in';
@@ -262,9 +299,6 @@ function renderThread(threadComments, selfId) {
   });
 }
 
-// 노드 바운딩 박스 기준으로 항목 크기를 판단한다. 가로/세로 중 하나가 이 값 이상이면 전체 이미지로 간주.
-const FULL_IMAGE_THRESHOLD = 1440;
-
 // 이미지 위에 댓글 핀 마커를 배치한다.
 function positionPin(offset, bounds) {
   if (!offset || !bounds || !bounds.width || !bounds.height) {
@@ -275,8 +309,8 @@ function positionPin(offset, bounds) {
   const topPct = Math.max(0, Math.min(100, (offset.y / bounds.height) * 100));
   designPinEl.style.left = `${leftPct}%`;
   designPinEl.style.top = `${topPct}%`;
-  designPinEl.classList.remove('hidden');
 }
+
 
 async function loadDesignPreview(pin) {
   const requestId = ++state.previewRequestId;
@@ -284,45 +318,70 @@ async function loadDesignPreview(pin) {
   designPinEl.classList.add('hidden');
   const nodeId = pin && pin.nodeId;
   state.selectedNodeId = nodeId || null;
+
+  // 특정 노드에 연결되지 않은 전체(캔버스) 코멘트인 경우
   if (!nodeId) {
     if (requestId !== state.previewRequestId) return;
-    setStatus(designStatusEl, '노드에 연결된 이미지가 없습니다.', null);
+    setStatus(
+      designStatusEl,
+      '전체(캔버스) 디자인이거나 노드 정보가 없습니다. 상단의 [Figma 상세보기]를 이용해 주세요.',
+      null
+    );
     return;
   }
+
   setStatus(designStatusEl, '이미지 로딩 중...', null);
   try {
-    // 노드 크기를 조회해 전체 이미지 여부와 핀 위치 기준을 구한다.
-    let bounds = null;
-    const boundsRes = await window.figmaAPI.getNode(getToken(), getFileKey(), nodeId);
+    const scale = 0.25;
+    const cacheKey = `${nodeId}@${scale}`;
+    let cachedUrl = state.imageCache.get(cacheKey);
+
+    // 노드 메타정보(핀 위치용)와 이미지 URL 조회를 병렬로 처리
+    const [boundsRes, imageRes] = await Promise.all([
+      window.figmaAPI.getNode(getToken(), getFileKey(), nodeId),
+      cachedUrl ? Promise.resolve(null) : window.figmaAPI.getImages(getToken(), getFileKey(), [nodeId], scale),
+    ]);
+
     if (requestId !== state.previewRequestId) return;
-    if (boundsRes.ok) {
-      const doc =
+
+    let doc = null;
+    let bounds = null;
+    if (boundsRes && boundsRes.ok) {
+      if (boundsRes.data.name) {
+        state.fileName = boundsRes.data.name;
+      }
+      doc =
         boundsRes.data.nodes &&
         boundsRes.data.nodes[nodeId] &&
         boundsRes.data.nodes[nodeId].document;
       bounds = (doc && doc.absoluteBoundingBox) || null;
     }
-    const isFullImage =
-      !!bounds &&
-      (bounds.width >= FULL_IMAGE_THRESHOLD || bounds.height >= FULL_IMAGE_THRESHOLD);
-    const scale = isFullImage ? 0.25 : 0.5;
 
-    const cacheKey = `${nodeId}@${scale}`;
-    let url = state.imageCache.get(cacheKey);
+    // 캔버스/문서 전체 레벨(CANVAS, DOCUMENT)인 경우만 차단
+    if (doc && (doc.type === 'CANVAS' || doc.type === 'DOCUMENT')) {
+      designImageInnerEl.classList.add('hidden');
+      setStatus(
+        designStatusEl,
+        '캔버스 전체에 작성된 코멘트는 미리보기를 지원하지 않습니다. 상단의 [Figma 상세보기]를 이용해 주세요.',
+        null
+      );
+      return;
+    }
+
+    let url = cachedUrl;
     if (!url) {
-      const res = await window.figmaAPI.getImages(getToken(), getFileKey(), [nodeId], scale);
-      if (requestId !== state.previewRequestId) return;
-      if (!res.ok) {
-        setStatus(designStatusEl, `이미지 조회 실패: ${res.error}`, 'error');
+      if (!imageRes.ok) {
+        setStatus(designStatusEl, `이미지 조회 실패: ${imageRes.error}`, 'error');
         return;
       }
-      url = res.data.images && res.data.images[nodeId];
+      url = imageRes.data.images && imageRes.data.images[nodeId];
       if (!url) {
         setStatus(designStatusEl, '이미지를 생성하지 못했습니다.', 'error');
         return;
       }
       state.imageCache.set(cacheKey, url);
     }
+
     designImageEl.src = url;
     designImageInnerEl.classList.remove('hidden');
     positionPin(pin.offset, bounds);
@@ -340,6 +399,7 @@ function syncReplySubmitState() {
 async function openDetail(comment) {
   const rootId = getRootId(comment);
   state.selectedRootId = rootId;
+  state.selectedCommentId = comment.id;
 
   const threadComments = getThreadComments(rootId);
   renderThread(threadComments, comment.id);

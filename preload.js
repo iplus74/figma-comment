@@ -11,4 +11,5 @@ contextBridge.exposeInMainWorld('figmaAPI', {
   postComment: (token, fileKey, message, commentId) =>
     ipcRenderer.invoke('figma:postComment', { token, fileKey, message, commentId }),
   openImage: (url) => ipcRenderer.invoke('app:openImage', { url }),
+  openExternal: (url) => ipcRenderer.invoke('app:openExternal', { url }),
 });

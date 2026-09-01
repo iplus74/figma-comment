@@ -1,7 +1,8 @@
 // main.js - Electron 메인 프로세스
 // Figma REST API 호출을 담당하고, 렌더러 프로세스와는 IPC 로 통신한다.
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
+const { exec } = require('child_process');
 
 const FIGMA_API_BASE = 'https://api.figma.com/v1';
 
@@ -124,6 +125,38 @@ ipcMain.handle('app:openImage', (_event, { url }) => {
   });
   win.loadURL(url);
   return { ok: true };
+});
+
+// Google Chrome 브라우저로 URL 열기 (미설치 시 기본 브라우저 fallback)
+ipcMain.handle('app:openExternal', async (_event, { url }) => {
+  if (!url || !/^https?:\/\//i.test(url)) {
+    return { ok: false, error: '유효한 URL 이 아닙니다.' };
+  }
+
+  let command;
+  if (process.platform === 'darwin') {
+    command = `open -a "Google Chrome" "${url}"`;
+  } else if (process.platform === 'win32') {
+    command = `start chrome "${url}"`;
+  } else {
+    command = `google-chrome "${url}" || google-chrome-stable "${url}"`;
+  }
+
+  return new Promise((resolve) => {
+    exec(command, async (err) => {
+      if (err) {
+        // Chrome 실행 실패 시 시스템 기본 브라우저로 열기
+        try {
+          await shell.openExternal(url);
+          resolve({ ok: true });
+        } catch (shellErr) {
+          resolve({ ok: false, error: shellErr.message });
+        }
+      } else {
+        resolve({ ok: true });
+      }
+    });
+  });
 });
 
 // 답글 등록
