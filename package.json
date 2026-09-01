@@ -17,46 +17,30 @@
     "dist:all": "electron-builder -mwl"
   },
   "devDependencies": {
-    "electron": "^31.0.0",
+    "electron": "^42.3.3",
     "electron-builder": "^26.15.3",
     "sharp": "^0.35.4"
   },
   "build": {
     "appId": "com.wecostay.figmacommentviewer",
     "productName": "FigCommi",
-    "directories": {
-      "output": "dist",
-      "buildResources": "build"
-    },
-    "files": [
-      "main.js",
-      "preload.js",
-      "renderer/**/*",
-      "build/icon.png",
-      "package.json"
-    ],
+    "asar": true,
     "mac": {
-      "target": [
-        "dmg"
-      ],
-      "icon": "build/icon.png",
+      "icon": "build/icon.icns",
+      "target": "dmg",
       "category": "public.app-category.productivity"
     },
     "win": {
-      "target": [
-        "nsis"
-      ],
-      "icon": "build/icon.png"
+      "icon": "build/icon.png",
+      "target": "nsis"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     },
     "linux": {
-      "target": [
-        "AppImage"
-      ],
       "icon": "build/icon.png",
+      "target": "AppImage",
       "category": "Utility"
     }
   }
