@@ -12,6 +12,7 @@
     <h1 class="app-title">Figma Comment Viewer</h1>
     <nav class="app-nav">
       <button id="btn-nav-list" class="nav-btn" data-screen="list">댓글 목록</button>
+      <button id="btn-nav-ai" class="nav-btn" data-screen="ai">AI 검색</button>
       <button id="btn-nav-settings" class="nav-btn" data-screen="settings">설정</button>
     </nav>
   </header>
@@ -72,25 +73,122 @@
       </div>
     </section>
 
+    <!-- AI 검색 화면 -->
+    <section id="screen-ai" class="screen hidden">
+      <form id="ai-search-form" class="ai-search-form">
+        <label>
+          페이지
+          <select id="ai-page-select">
+            <option value="">페이지를 선택하세요</option>
+          </select>
+        </label>
+        <label>
+          요청 내용
+          <textarea
+            id="ai-query-input"
+            rows="5"
+            placeholder="Figma 텍스트 노드 및 댓글 데이터를 기반으로 분석할 요청 내용을 입력하세요."
+          ></textarea>
+        </label>
+        <label>
+          AI 모델 선택
+          <select id="ai-model-select">
+            <option value="">기본값 (자동)</option>
+          </select>
+        </label>
+        <div class="ai-search-actions">
+          <button type="submit" id="btn-ai-request">요청</button>
+          <button type="button" id="btn-ai-show-last" class="btn-secondary hidden">최근 분석 결과 보기</button>
+        </div>
+        <div id="ai-search-status" class="status-msg"></div>
+      </form>
+    </section>
+
     <!-- 설정 화면 -->
     <section id="screen-settings" class="screen hidden">
       <form id="settings-form" class="settings-form">
-        <label>
-          Figma Personal Access Token
-          <input type="password" id="settings-token" placeholder="figd_..." autocomplete="off" />
-        </label>
-        <label>
-          File Key
-          <input type="text" id="settings-file-key" placeholder="예: abcDEF123456" />
-        </label>
+        <div class="settings-section">
+          <h2 class="settings-section-title">Figma 설정</h2>
+          <label>
+            Figma Personal Access Token
+            <input type="password" id="settings-token" placeholder="figd_..." autocomplete="off" />
+          </label>
+          <label>
+            File Key
+            <input type="text" id="settings-file-key" placeholder="예: abcDEF123456" />
+          </label>
+          <div class="settings-sub-actions">
+            <button type="button" id="btn-test-connection" class="btn-secondary">연결 테스트</button>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h2 class="settings-section-title">AI 설정</h2>
+          <label>
+            AI 요약 모듈 선택
+            <select id="settings-ai-module">
+              <option value="copilot">Github Copilot SDK</option>
+              <option value="antigravity">Antigravity cli 사용</option>
+            </select>
+            <small class="field-tip"><strong>AI 검색시 사용될 모듈입니다</strong></small>
+          </label>
+
+          <div id="copilot-settings-group" class="settings-subgroup">
+            <label>
+              Github 토큰 (선택)
+              <input
+                type="text"
+                id="settings-github-token"
+                placeholder="Copilot 사용 가능한 GitHub 토큰 (선택)"
+                autocomplete="off"
+              />
+            </label>
+            <small class="field-tip">
+              토큰을 비워두면 로컬에 로그인된 Copilot CLI(<code>copilot login</code>) 인증을 사용합니다. 입력 시 반드시 유효한 토큰이어야 합니다(Bad credentials 오류 시 토큰 값을 확인하거나 비워 두세요).
+            </small>
+          </div>
+
+          <div class="settings-field">
+            <label for="settings-ai-save-dir">AI 결과 저장 폴더</label>
+            <div class="folder-picker-row">
+              <input
+                type="text"
+                id="settings-ai-save-dir"
+                placeholder="결과를 저장할 폴더 경로"
+              />
+              <button type="button" id="btn-choose-ai-folder" class="btn-secondary">폴더 선택</button>
+            </div>
+          </div>
+        </div>
+
         <div class="settings-actions">
-          <button type="button" id="btn-test-connection">연결 테스트</button>
           <button type="submit" id="btn-save-settings">저장</button>
         </div>
         <div id="settings-status" class="status-msg"></div>
       </form>
     </section>
   </main>
+
+  <!-- AI 분석 결과 팝업 레이어 -->
+  <div id="ai-result-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="ai-modal-title">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h3 id="ai-modal-title" class="modal-title">AI 데이터 분석 결과</h3>
+        <button type="button" id="btn-ai-modal-close-x" class="modal-close-x" aria-label="닫기">✕</button>
+      </div>
+      <div id="ai-modal-meta" class="modal-meta"></div>
+      <div class="modal-body">
+        <div id="ai-modal-content" class="markdown-body"></div>
+      </div>
+      <div class="modal-footer">
+        <div class="modal-footer-left">
+          <button type="button" id="btn-ai-copy" class="btn-secondary">클립보드 복사</button>
+          <button type="button" id="btn-ai-open-file" class="btn-secondary">저장된 파일 위치 열기</button>
+        </div>
+        <button type="button" id="btn-ai-modal-close">닫기</button>
+      </div>
+    </div>
+  </div>
 
   <script src="renderer.js"></script>
 </body>

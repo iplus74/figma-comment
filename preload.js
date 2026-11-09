@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('figmaAPI', {
   getMe: (token) => ipcRenderer.invoke('figma:getMe', { token }),
+  getPages: (token, fileKey) => ipcRenderer.invoke('figma:getPages', { token, fileKey }),
   getComments: (token, fileKey) => ipcRenderer.invoke('figma:getComments', { token, fileKey }),
   getImages: (token, fileKey, nodeIds, scale) =>
     ipcRenderer.invoke('figma:getImages', { token, fileKey, nodeIds, scale }),
@@ -12,4 +13,11 @@ contextBridge.exposeInMainWorld('figmaAPI', {
     ipcRenderer.invoke('figma:postComment', { token, fileKey, message, commentId }),
   openImage: (url) => ipcRenderer.invoke('app:openImage', { url }),
   openExternal: (url) => ipcRenderer.invoke('app:openExternal', { url }),
+  chooseFolder: () => ipcRenderer.invoke('settings:chooseFolder'),
+  getDefaultAiSaveDir: () => ipcRenderer.invoke('settings:getDefaultAiSaveDir'),
+  openPath: (targetPath, showInFolder) =>
+    ipcRenderer.invoke('app:openPath', { targetPath, showInFolder }),
+  getAiModels: (aiModule, githubToken) =>
+    ipcRenderer.invoke('ai:getModels', { aiModule, githubToken }),
+  searchAndAnalyzeAi: (payload) => ipcRenderer.invoke('ai:searchAndAnalyze', payload),
 });

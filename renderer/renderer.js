@@ -4,6 +4,11 @@
 const STORAGE_KEYS = {
   token: 'figma_token',
   fileKey: 'figma_file_key',
+  aiModule: 'figma_ai_module',
+  aiModelCopilot: 'figma_ai_model_copilot',
+  aiModelAntigravity: 'figma_ai_model_antigravity',
+  githubToken: 'figma_github_token',
+  aiSaveDir: 'figma_ai_save_dir',
 };
 
 const state = {
@@ -15,12 +20,17 @@ const state = {
   imageCache: new Map(), // nodeId -> 이미지 URL 캐시
   selectedNodeId: null, // 현재 미리보기 중인 노드 id
   fileName: null, // Figma 파일 이름
+  lastAiResult: null, // 마지막 AI 분석 결과
+  pages: [], // depth=1 로 조회한 페이지 목록 [{ id, name }]
+  pagesLoadedForKey: null, // 페이지 목록을 로드한 기준 fileKey
+  modelsCache: {}, // aiModule -> [{ id, name }]
 };
 
 // ---------- 화면 전환 ----------
 const screens = {
   list: document.getElementById('screen-list'),
   detail: document.getElementById('screen-detail'),
+  ai: document.getElementById('screen-ai'),
   settings: document.getElementById('screen-settings'),
 };
 
@@ -28,20 +38,75 @@ function showScreen(name) {
   Object.entries(screens).forEach(([key, el]) => {
     el.classList.toggle('hidden', key !== name);
   });
+  if (name === 'ai') {
+    ensureAiPagesLoaded();
+    loadAiModelsForModule(getAiModule(), false);
+  }
 }
 
 document.getElementById('btn-nav-list').addEventListener('click', () => showScreen('list'));
+document.getElementById('btn-nav-ai').addEventListener('click', () => showScreen('ai'));
 document.getElementById('btn-nav-settings').addEventListener('click', () => showScreen('settings'));
 document.getElementById('btn-back').addEventListener('click', () => showScreen('list'));
 
 // ---------- 설정 ----------
 const tokenInput = document.getElementById('settings-token');
 const fileKeyInput = document.getElementById('settings-file-key');
+const aiModuleSelect = document.getElementById('settings-ai-module');
+const copilotSettingsGroup = document.getElementById('copilot-settings-group');
+const githubTokenInput = document.getElementById('settings-github-token');
+const aiSaveDirInput = document.getElementById('settings-ai-save-dir');
+const btnChooseAiFolder = document.getElementById('btn-choose-ai-folder');
 const settingsStatus = document.getElementById('settings-status');
 
-function loadSettings() {
+function getModelStorageKey(moduleValue) {
+  return moduleValue === 'antigravity'
+    ? STORAGE_KEYS.aiModelAntigravity
+    : STORAGE_KEYS.aiModelCopilot;
+}
+
+function toggleCopilotTokenField(moduleValue) {
+  const isCopilot = moduleValue !== 'antigravity';
+  copilotSettingsGroup.classList.toggle('hidden', !isCopilot);
+}
+
+aiModuleSelect.addEventListener('change', () => {
+  toggleCopilotTokenField(aiModuleSelect.value);
+});
+
+btnChooseAiFolder.addEventListener('click', async () => {
+  try {
+    const res = await window.figmaAPI.chooseFolder();
+    if (res && res.ok && res.folderPath) {
+      aiSaveDirInput.value = res.folderPath;
+    }
+  } catch (err) {
+    setStatus(settingsStatus, `폴더 선택 실패: ${err.message}`, 'error');
+  }
+});
+
+async function loadSettings() {
   tokenInput.value = localStorage.getItem(STORAGE_KEYS.token) || '';
   fileKeyInput.value = localStorage.getItem(STORAGE_KEYS.fileKey) || '';
+  const savedAiModule = localStorage.getItem(STORAGE_KEYS.aiModule) || 'copilot';
+  aiModuleSelect.value = savedAiModule;
+  githubTokenInput.value = localStorage.getItem(STORAGE_KEYS.githubToken) || '';
+  toggleCopilotTokenField(savedAiModule);
+
+  const savedDir = localStorage.getItem(STORAGE_KEYS.aiSaveDir) || '';
+  if (savedDir) {
+    aiSaveDirInput.value = savedDir;
+  } else if (window.figmaAPI.getDefaultAiSaveDir) {
+    try {
+      const defaultDir = await window.figmaAPI.getDefaultAiSaveDir();
+      if (defaultDir) {
+        aiSaveDirInput.value = defaultDir;
+        localStorage.setItem(STORAGE_KEYS.aiSaveDir, defaultDir);
+      }
+    } catch {
+      // ignore
+    }
+  }
 }
 
 function getToken() {
@@ -52,6 +117,23 @@ function getFileKey() {
   return localStorage.getItem(STORAGE_KEYS.fileKey) || '';
 }
 
+function getAiModule() {
+  return localStorage.getItem(STORAGE_KEYS.aiModule) || 'copilot';
+}
+
+function getAiModel() {
+  const mod = getAiModule();
+  return localStorage.getItem(getModelStorageKey(mod)) || '';
+}
+
+function getGithubToken() {
+  return localStorage.getItem(STORAGE_KEYS.githubToken) || '';
+}
+
+function getAiSaveDir() {
+  return localStorage.getItem(STORAGE_KEYS.aiSaveDir) || aiSaveDirInput.value.trim() || '';
+}
+
 function setStatus(el, message, type) {
   el.textContent = message || '';
   el.classList.remove('error', 'success');
@@ -60,8 +142,23 @@ function setStatus(el, message, type) {
 
 document.getElementById('settings-form').addEventListener('submit', (e) => {
   e.preventDefault();
+  const prevFileKey = getFileKey();
+  const nextFileKey = fileKeyInput.value.trim();
+  const prevGithubToken = getGithubToken();
+  const nextGithubToken = githubTokenInput.value.trim();
+  const selectedModule = aiModuleSelect.value;
   localStorage.setItem(STORAGE_KEYS.token, tokenInput.value.trim());
-  localStorage.setItem(STORAGE_KEYS.fileKey, fileKeyInput.value.trim());
+  localStorage.setItem(STORAGE_KEYS.fileKey, nextFileKey);
+  localStorage.setItem(STORAGE_KEYS.aiModule, selectedModule);
+  localStorage.setItem(STORAGE_KEYS.githubToken, nextGithubToken);
+  localStorage.setItem(STORAGE_KEYS.aiSaveDir, aiSaveDirInput.value.trim());
+  if (prevFileKey !== nextFileKey) {
+    state.pagesLoadedForKey = null;
+    state.pages = [];
+  }
+  if (prevGithubToken !== nextGithubToken) {
+    delete state.modelsCache.copilot;
+  }
   setStatus(settingsStatus, '저장되었습니다.', 'success');
 });
 
@@ -462,6 +559,260 @@ replyForm.addEventListener('submit', async (e) => {
 replyInput.addEventListener('input', () => {
   setStatus(replyStatus, '', null);
   syncReplySubmitState();
+});
+
+// ---------- AI 검색 및 결과 팝업 ----------
+const aiSearchForm = document.getElementById('ai-search-form');
+const aiPageSelect = document.getElementById('ai-page-select');
+const aiQueryInput = document.getElementById('ai-query-input');
+const aiModelSelect = document.getElementById('ai-model-select');
+const btnAiRequest = document.getElementById('btn-ai-request');
+const btnAiShowLast = document.getElementById('btn-ai-show-last');
+const aiSearchStatus = document.getElementById('ai-search-status');
+
+const aiResultModal = document.getElementById('ai-result-modal');
+const aiModalMeta = document.getElementById('ai-modal-meta');
+const aiModalContent = document.getElementById('ai-modal-content');
+const btnAiModalCloseX = document.getElementById('btn-ai-modal-close-x');
+const btnAiModalClose = document.getElementById('btn-ai-modal-close');
+const btnAiCopy = document.getElementById('btn-ai-copy');
+const btnAiOpenFile = document.getElementById('btn-ai-open-file');
+
+function renderAiModelOptions(models, selectedModel) {
+  aiModelSelect.innerHTML = '<option value="">기본값 (자동)</option>';
+  (models || []).forEach((m) => {
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    const baseName = m.name && m.name !== m.id ? `${m.name} (${m.id})` : m.id;
+    opt.textContent = m.pricing ? `${baseName} [${m.pricing}]` : baseName;
+    aiModelSelect.appendChild(opt);
+  });
+  if (selectedModel) {
+    const exists = Array.from(aiModelSelect.options).some((o) => o.value === selectedModel);
+    if (!exists) {
+      const customOpt = document.createElement('option');
+      customOpt.value = selectedModel;
+      customOpt.textContent = selectedModel;
+      aiModelSelect.appendChild(customOpt);
+    }
+    aiModelSelect.value = selectedModel;
+  } else {
+    aiModelSelect.value = '';
+  }
+}
+
+async function loadAiModelsForModule(moduleValue, forceRefresh) {
+  if (!window.figmaAPI.getAiModels) return;
+  const savedModel = localStorage.getItem(getModelStorageKey(moduleValue)) || '';
+
+  if (!forceRefresh && Array.isArray(state.modelsCache[moduleValue])) {
+    renderAiModelOptions(state.modelsCache[moduleValue], savedModel);
+    return;
+  }
+
+  aiModelSelect.disabled = true;
+  aiModelSelect.innerHTML = '<option value="">모델 목록 불러오는 중...</option>';
+  try {
+    const res = await window.figmaAPI.getAiModels(moduleValue, getGithubToken());
+    if (res && res.ok && res.data && Array.isArray(res.data.models)) {
+      state.modelsCache[moduleValue] = res.data.models;
+      renderAiModelOptions(res.data.models, savedModel);
+    } else {
+      renderAiModelOptions([], savedModel);
+    }
+  } catch {
+    renderAiModelOptions([], savedModel);
+  } finally {
+    aiModelSelect.disabled = false;
+  }
+}
+
+aiModelSelect.addEventListener('change', () => {
+  localStorage.setItem(getModelStorageKey(getAiModule()), aiModelSelect.value);
+});
+
+async function ensureAiPagesLoaded() {
+  const token = getToken();
+  const fileKey = getFileKey();
+  if (!token || !fileKey) {
+    aiPageSelect.innerHTML = '<option value="">설정에서 Token 과 File Key 를 먼저 입력해주세요</option>';
+    return;
+  }
+  if (state.pagesLoadedForKey === fileKey && state.pages.length > 0) {
+    return;
+  }
+
+  aiPageSelect.disabled = true;
+  aiPageSelect.innerHTML = '<option value="">페이지 목록 불러오는 중...</option>';
+  try {
+    const res = await window.figmaAPI.getPages(token, fileKey);
+    if (!res.ok) {
+      aiPageSelect.innerHTML = '<option value="">페이지 목록 조회 실패</option>';
+      setStatus(aiSearchStatus, `페이지 목록 조회 실패: ${res.error}`, 'error');
+      return;
+    }
+
+    const pages = (res.data && res.data.pages) || [];
+    state.pages = pages;
+    state.pagesLoadedForKey = fileKey;
+    if (res.data && res.data.fileName) {
+      state.fileName = res.data.fileName;
+    }
+
+    if (pages.length === 0) {
+      aiPageSelect.innerHTML = '<option value="">조회된 페이지가 없습니다</option>';
+      return;
+    }
+
+    aiPageSelect.innerHTML = '';
+    pages.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name;
+      aiPageSelect.appendChild(opt);
+    });
+    setStatus(aiSearchStatus, '', null);
+  } catch (err) {
+    aiPageSelect.innerHTML = '<option value="">페이지 목록 조회 실패</option>';
+    setStatus(aiSearchStatus, `페이지 목록 조회 실패: ${err.message}`, 'error');
+  } finally {
+    aiPageSelect.disabled = false;
+  }
+}
+
+function openAiResultModal(resultData) {
+  if (!resultData) return;
+  const meta = resultData.meta || {};
+  aiModalMeta.innerHTML = `
+    <div><strong>AI 모듈:</strong> ${escapeHtml(meta.moduleLabel || meta.aiModule || '')} | <strong>파일:</strong> ${escapeHtml(meta.fileName || '')} | <strong>페이지:</strong> ${escapeHtml(meta.pageName || '')} | <strong>텍스트 노드:</strong> ${meta.includedTextCount ?? 0}/${meta.totalTextCount ?? 0}건 | <strong>댓글 쓰레드:</strong> ${meta.includedThreadCount ?? 0}/${meta.totalThreadCount ?? 0}건</div>
+    <div><strong>저장 경로:</strong> <code>${escapeHtml(resultData.filePath || '')}</code></div>
+  `;
+  aiModalContent.innerHTML = resultData.html || '';
+  aiResultModal.classList.remove('hidden');
+}
+
+function closeAiResultModal() {
+  aiResultModal.classList.add('hidden');
+}
+
+btnAiModalCloseX.addEventListener('click', closeAiResultModal);
+btnAiModalClose.addEventListener('click', closeAiResultModal);
+aiResultModal.addEventListener('click', (e) => {
+  if (e.target === aiResultModal) {
+    closeAiResultModal();
+  }
+});
+
+// 결과 팝업 내 마크다운 링크(관련화면, 관련노드, 참고자료 등) 클릭 시 외부 브라우저(Chrome 등)로 열기
+aiModalContent.addEventListener('click', (e) => {
+  const anchor = e.target.closest('a[href]');
+  if (!anchor) return;
+  const href = anchor.getAttribute('href');
+  if (href && /^https?:\/\//i.test(href)) {
+    e.preventDefault();
+    window.figmaAPI.openExternal(href);
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !aiResultModal.classList.contains('hidden')) {
+    closeAiResultModal();
+  }
+});
+
+btnAiShowLast.addEventListener('click', () => {
+  if (state.lastAiResult) {
+    openAiResultModal(state.lastAiResult);
+  }
+});
+
+btnAiCopy.addEventListener('click', async () => {
+  if (!state.lastAiResult || !state.lastAiResult.markdown) return;
+  try {
+    await navigator.clipboard.writeText(state.lastAiResult.markdown);
+    const prevText = btnAiCopy.textContent;
+    btnAiCopy.textContent = '복사됨!';
+    setTimeout(() => {
+      btnAiCopy.textContent = prevText;
+    }, 1500);
+  } catch {
+    // ignore
+  }
+});
+
+btnAiOpenFile.addEventListener('click', () => {
+  if (!state.lastAiResult || !state.lastAiResult.filePath) return;
+  window.figmaAPI.openPath(state.lastAiResult.filePath, true);
+});
+
+aiSearchForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pageId = aiPageSelect.value;
+  const selectedOpt = aiPageSelect.options[aiPageSelect.selectedIndex];
+  const pageName = selectedOpt ? selectedOpt.textContent : '';
+  const query = aiQueryInput.value.trim();
+  const token = getToken();
+  const fileKey = getFileKey();
+  const aiModule = getAiModule();
+  const aiModel = aiModelSelect.value || getAiModel();
+  localStorage.setItem(getModelStorageKey(aiModule), aiModel);
+  const githubToken = getGithubToken();
+  const aiSaveDir = getAiSaveDir();
+
+  if (!token || !fileKey) {
+    setStatus(aiSearchStatus, '설정 화면에서 Figma Token 과 File Key 를 먼저 입력해주세요.', 'error');
+    return;
+  }
+  if (!pageId) {
+    setStatus(aiSearchStatus, '조회할 페이지를 선택해주세요.', 'error');
+    return;
+  }
+  if (!query) {
+    setStatus(aiSearchStatus, '요청 내용을 입력해주세요.', 'error');
+    return;
+  }
+  if (!aiSaveDir) {
+    setStatus(aiSearchStatus, '설정 화면에서 AI 결과 저장 폴더를 선택해주세요.', 'error');
+    return;
+  }
+
+  btnAiRequest.disabled = true;
+  setStatus(
+    aiSearchStatus,
+    `선택한 페이지(${pageName})의 텍스트 노드 및 댓글 데이터를 조회하고 AI 분석을 진행 중입니다. 잠시만 기다려주세요...`,
+    null
+  );
+
+  try {
+    const res = await window.figmaAPI.searchAndAnalyzeAi({
+      token,
+      fileKey,
+      pageId,
+      pageName,
+      query,
+      aiModule,
+      aiModel,
+      githubToken,
+      aiSaveDir,
+    });
+
+    if (!res.ok) {
+      setStatus(aiSearchStatus, `AI 분석 실패: ${res.error}`, 'error');
+      return;
+    }
+
+    state.lastAiResult = res.data;
+    btnAiShowLast.classList.remove('hidden');
+    setStatus(
+      aiSearchStatus,
+      `분석 완료! Markdown 파일로 저장되었습니다: ${res.data.filePath}`,
+      'success'
+    );
+    openAiResultModal(res.data);
+  } catch (err) {
+    setStatus(aiSearchStatus, `AI 분석 실패: ${err.message}`, 'error');
+  } finally {
+    btnAiRequest.disabled = false;
+  }
 });
 
 // ---------- 초기화 ----------
