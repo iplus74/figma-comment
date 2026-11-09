@@ -1159,6 +1159,49 @@ ${query}
   }
 }
 
+// 마크다운 문서 내 모든 링크를 외부 브라우저 새 창(target="_blank")으로 열리도록 HTML 앵커 태그로 변환한다.
+function convertMarkdownLinksToTargetBlank(markdown) {
+  if (!markdown || typeof markdown !== 'string') return '';
+
+  // 1) 이미지 태그(![...](...))를 임시 플레이스홀더로 보호
+  const images = [];
+  let text = markdown.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (_m, alt, src) => {
+    const placeholder = `__IMG_PLACEHOLDER_${images.length}__`;
+    images.push({ placeholder, alt, src });
+    return placeholder;
+  });
+
+  // 2) 이미 존재하는 <a> 태그에 target="_blank" 및 rel="noopener noreferrer" 추가
+  text = text.replace(/<a\s+([^>]*?)>/gi, (_match, attrs) => {
+    let newAttrs = attrs;
+    if (!/target\s*=/i.test(newAttrs)) {
+      newAttrs += ' target="_blank"';
+    } else {
+      newAttrs = newAttrs.replace(/target\s*=\s*['"][^'"]*['"]/i, 'target="_blank"');
+    }
+    if (!/rel\s*=/i.test(newAttrs)) {
+      newAttrs += ' rel="noopener noreferrer"';
+    } else if (!/noopener/i.test(newAttrs)) {
+      newAttrs = newAttrs.replace(/rel\s*=\s*(['"])(.*?)\1/i, 'rel="noopener noreferrer $2"');
+    }
+    return `<a ${newAttrs.trim()}>`;
+  });
+
+  // 3) 마크다운 링크 [텍스트](URL)를 <a href="URL" target="_blank" rel="noopener noreferrer">텍스트</a> 로 변환
+  // 링크 라벨 내부의 백틱(`코드`)은 <code>코드</code>로 치환하여 HTML 호환성 보장
+  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_match, label, href) => {
+    const formattedLabel = label.replace(/`([^`]+)`/g, '<code>$1</code>');
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer">${formattedLabel}</a>`;
+  });
+
+  // 4) 이미지 플레이스홀더 복원
+  for (const img of images) {
+    text = text.replace(img.placeholder, `![${img.alt}](${img.src})`);
+  }
+
+  return text;
+}
+
 function formatTimestampForFilename(date = new Date()) {
   const yyyy = date.getFullYear();
   const mm = String(date.getMonth() + 1).padStart(2, '0');
@@ -1255,7 +1298,7 @@ async function analyzeFigmaWithAi({
     .filter(Boolean)
     .join(' / ');
 
-  const savedMarkdown = `# Figma AI 데이터 분석 결과
+  const rawMarkdown = `# Figma AI 데이터 분석 결과
 
 - **분석 일시**: ${now.toLocaleString('ko-KR')}
 - **Figma 파일**: [${context.fileName}](${fileRootUrl}) (\`${fileKey}\`)
@@ -1271,6 +1314,9 @@ async function analyzeFigmaWithAi({
 
 ${linkedAiResponseText}
 `;
+
+  // 저장되는 마크다운 내 관련 링크들이 어떤 뷰어에서도 새 창(target="_blank")으로 열리도록 변환
+  const savedMarkdown = convertMarkdownLinksToTargetBlank(rawMarkdown);
 
   await fs.writeFile(filePath, savedMarkdown, 'utf-8');
 

@@ -213,6 +213,20 @@ async function getMarkedParser() {
   if (!markedParser) {
     const mod = await import('marked');
     markedParser = mod.marked || mod;
+    if (typeof markedParser.use === 'function') {
+      markedParser.use({
+        renderer: {
+          link(item) {
+            // marked v4+ 객체 형태 { href, title, text, tokens } 또는 v3 이전 (href, title, text) 대응
+            const href = typeof item === 'object' && item !== null ? item.href : arguments[0];
+            const title = typeof item === 'object' && item !== null ? item.title : arguments[1];
+            const text = typeof item === 'object' && item !== null ? item.text : arguments[2];
+            const titleAttr = title ? ` title="${title}"` : '';
+            return `<a href="${href || ''}" target="_blank" rel="noopener noreferrer"${titleAttr}>${text || ''}</a>`;
+          },
+        },
+      });
+    }
     if (typeof markedParser.setOptions === 'function') {
       markedParser.setOptions({
         gfm: true,
