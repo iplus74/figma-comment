@@ -7,6 +7,7 @@ const STORAGE_KEYS = {
   aiModule: 'figma_ai_module',
   aiModelCopilot: 'figma_ai_model_copilot',
   aiModelAntigravity: 'figma_ai_model_antigravity',
+  aiModelClaude: 'figma_ai_model_claude',
   githubToken: 'figma_github_token',
   aiSaveDir: 'figma_ai_save_dir',
 };
@@ -40,7 +41,7 @@ function showScreen(name) {
   });
   if (name === 'ai') {
     ensureAiPagesLoaded();
-    loadAiModelsForModule(getAiModule(), false);
+    loadAiModelsForModule(getAiModule(), true);
   }
 }
 
@@ -60,13 +61,13 @@ const btnChooseAiFolder = document.getElementById('btn-choose-ai-folder');
 const settingsStatus = document.getElementById('settings-status');
 
 function getModelStorageKey(moduleValue) {
-  return moduleValue === 'antigravity'
-    ? STORAGE_KEYS.aiModelAntigravity
-    : STORAGE_KEYS.aiModelCopilot;
+  if (moduleValue === 'antigravity') return STORAGE_KEYS.aiModelAntigravity;
+  if (moduleValue === 'claude') return STORAGE_KEYS.aiModelClaude;
+  return STORAGE_KEYS.aiModelCopilot;
 }
 
 function toggleCopilotTokenField(moduleValue) {
-  const isCopilot = moduleValue !== 'antigravity';
+  const isCopilot = moduleValue === 'copilot';
   copilotSettingsGroup.classList.toggle('hidden', !isCopilot);
 }
 
@@ -601,7 +602,7 @@ function renderAiModelOptions(models, selectedModel) {
   }
 }
 
-async function loadAiModelsForModule(moduleValue, forceRefresh) {
+async function loadAiModelsForModule(moduleValue, forceRefresh = true) {
   if (!window.figmaAPI.getAiModels) return;
   const savedModel = localStorage.getItem(getModelStorageKey(moduleValue)) || '';
 

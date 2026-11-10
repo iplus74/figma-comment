@@ -9,6 +9,7 @@
   "scripts": {
     "start": "electron .",
     "icons": "node scripts/generate-icons.js",
+    "pdf": "env -u ELECTRON_RUN_AS_NODE electron scripts/generate-pdf.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
@@ -25,13 +26,17 @@
     "appId": "com.wecostay.figmacommentviewer",
     "productName": "FigCommi",
     "asar": true,
+    "afterSign": "scripts/after-pack.js",
     "asarUnpack": [
       "**/node_modules/@github/**/*"
     ],
     "mac": {
       "icon": "build/icon.icns",
       "target": "dmg",
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
     },
     "win": {
       "icon": "build/icon.png",

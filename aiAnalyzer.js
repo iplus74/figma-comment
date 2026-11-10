@@ -124,6 +124,22 @@ function sanitizeGithubToken(rawToken) {
     .trim();
 }
 
+function getNvmBinDirs() {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  const nvmNodesDir = path.join(home, '.nvm', 'versions', 'node');
+  try {
+    if (fsSync.existsSync(nvmNodesDir)) {
+      return fsSync
+        .readdirSync(nvmNodesDir)
+        .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+        .map((ver) => path.join(nvmNodesDir, ver, 'bin'));
+    }
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
 function resolveAgyCliPath() {
   const home = process.env.HOME || process.env.USERPROFILE || '';
   const candidates = [
@@ -144,10 +160,38 @@ function resolveAgyCliPath() {
   return 'agy';
 }
 
+function resolveClaudeCliPath() {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  const binName = process.platform === 'win32' ? 'claude.exe' : 'claude';
+  const nvmBins = getNvmBinDirs().map((dir) => path.join(dir, binName));
+  const candidates = [
+    path.join(home, '.local', 'bin', binName),
+    path.join(home, '.claude', 'local', binName),
+    '/opt/homebrew/bin/claude',
+    '/usr/local/bin/claude',
+    path.join(home, '.npm-global', 'bin', binName),
+    ...nvmBins,
+  ];
+
+  for (const c of candidates) {
+    try {
+      if (fsSync.existsSync(c)) {
+        return c;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return 'claude';
+}
+
 function getAgyEnv() {
   const home = process.env.HOME || process.env.USERPROFILE || '';
   const extraPaths = [
     path.join(home, '.local', 'bin'),
+    path.join(home, '.claude', 'local'),
+    path.join(home, '.npm-global', 'bin'),
+    ...getNvmBinDirs(),
     '/opt/homebrew/bin',
     '/usr/local/bin',
     '/usr/bin',
@@ -163,6 +207,12 @@ function getAgyEnv() {
     ...process.env,
     PATH: mergedPath,
   };
+}
+
+function normalizeAiModule(aiModule) {
+  if (aiModule === 'antigravity') return 'antigravity';
+  if (aiModule === 'claude') return 'claude';
+  return 'copilot';
 }
 
 // 한국어 조사/어미 및 일반 불용어 제거 목록
@@ -975,9 +1025,200 @@ async function listAntigravityModels() {
   });
 }
 
+function getClaudeModelPricing(modelId) {
+  const lower = String(modelId || '').toLowerCase();
+  if (lower.includes('opus')) {
+    return '입력 $15.00 / 출력 $75.00 (1M tok)';
+  }
+  if (lower.includes('sonnet')) {
+    return '입력 $3.00 / 출력 $15.00 (1M tok)';
+  }
+  if (lower.includes('haiku-4-5') || lower.includes('haiku-5')) {
+    return '입력 $1.00 / 출력 $5.00 (1M tok)';
+  }
+  if (lower.includes('haiku')) {
+    return '입력 $0.80 / 출력 $4.00 (1M tok)';
+  }
+  return '';
+}
+
+function formatClaudeModelName(modelId) {
+  const id = String(modelId || '').trim();
+  if (id === 'sonnet') return 'Claude Sonnet (최신 기본 별칭)';
+  if (id === 'opus') return 'Claude Opus (고성능 추론 별칭)';
+  if (id === 'haiku') return 'Claude Haiku (빠른 응답 별칭)';
+  const m = id.match(/^claude-(opus|sonnet|haiku)-(\d+)(?:-(\d+))?(?:-(\d{8}))?$/i);
+  if (m) {
+    const family = m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase();
+    const ver = m[3] ? `${m[2]}.${m[3]}` : m[2];
+    const dateSuffix = m[4] ? ` (${m[4]})` : '';
+    return `Claude ${family} ${ver}${dateSuffix}`;
+  }
+  return id;
+}
+
+// Claude CLI (`claude`) 실시간 모델 탐색 실패/미설치 시 기본 Fallback 목록
+const CLAUDE_CLI_FALLBACK_MODELS = [
+  {
+    id: 'sonnet',
+    name: 'Claude Sonnet (최신 기본 별칭)',
+    pricing: '입력 $3.00 / 출력 $15.00 (1M tok)',
+  },
+  {
+    id: 'opus',
+    name: 'Claude Opus (고성능 추론 별칭)',
+    pricing: '입력 $15.00 / 출력 $75.00 (1M tok)',
+  },
+  {
+    id: 'haiku',
+    name: 'Claude Haiku (빠른 응답 별칭)',
+    pricing: '입력 $0.80 / 출력 $4.00 (1M tok)',
+  },
+  {
+    id: 'claude-sonnet-4-6',
+    name: 'Claude Sonnet 4.6',
+    pricing: '입력 $3.00 / 출력 $15.00 (1M tok)',
+  },
+  {
+    id: 'claude-opus-4-6',
+    name: 'Claude Opus 4.6',
+    pricing: '입력 $15.00 / 출력 $75.00 (1M tok)',
+  },
+  {
+    id: 'claude-sonnet-4-5',
+    name: 'Claude Sonnet 4.5',
+    pricing: '입력 $3.00 / 출력 $15.00 (1M tok)',
+  },
+  {
+    id: 'claude-haiku-4-5',
+    name: 'Claude Haiku 4.5',
+    pricing: '입력 $1.00 / 출력 $5.00 (1M tok)',
+  },
+];
+
+// 로컬 Claude CLI (`claude --help` 및 바이너리/패키지) 또는 Anthropic API에서 실시간 모델 목록 조회
+async function listClaudeModels() {
+  const discoveredMap = new Map();
+  const addModel = (id, customName) => {
+    const cleanId = String(id || '').trim();
+    if (!cleanId || discoveredMap.has(cleanId)) return;
+    discoveredMap.set(cleanId, {
+      id: cleanId,
+      name: customName || formatClaudeModelName(cleanId),
+      pricing: getClaudeModelPricing(cleanId),
+    });
+  };
+
+  // 1) ANTHROPIC_API_KEY가 설정된 경우 Anthropic 공식 Models API 실시간 조회
+  const apiKey = (process.env.ANTHROPIC_API_KEY || '').trim();
+  if (apiKey) {
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/models?limit=50', {
+        method: 'GET',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const apiModels = Array.isArray(json && json.data) ? json.data : [];
+        addModel('sonnet');
+        addModel('opus');
+        addModel('haiku');
+        for (const item of apiModels) {
+          if (item && item.id) {
+            addModel(item.id, item.display_name || formatClaudeModelName(item.id));
+          }
+        }
+      }
+    } catch {
+      // ignore API error and continue to CLI inspection
+    }
+  }
+
+  // 2) 로컬에 설치된 claude CLI 실행(`claude --help`) 및 바이너리/번들에서 실시간 모델 ID 추출
+  const env = getAgyEnv();
+  let claudePath = resolveClaudeCliPath();
+
+  if (claudePath === 'claude') {
+    const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+    const resolvedByWhich = await new Promise((resolve) => {
+      execFile(whichCmd, ['claude'], { env, timeout: 5000 }, (err, stdout) => {
+        if (err || !stdout) return resolve('');
+        const firstLine = String(stdout).split(/\r?\n/)[0].trim();
+        resolve(firstLine);
+      });
+    });
+    if (resolvedByWhich) {
+      claudePath = resolvedByWhich;
+    }
+  }
+
+  const helpOutput = await new Promise((resolve) => {
+    const child = execFile(
+      claudePath,
+      ['--help'],
+      { env, timeout: 10000, maxBuffer: 2 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err && !stdout) return resolve('');
+        resolve(`${stdout || ''}\n${stderr || ''}`);
+      }
+    );
+    if (child.stdin) child.stdin.end();
+  });
+
+  if (helpOutput) {
+    // CLI가 정상 동작하면 기본 별칭(sonnet, opus, haiku) 우선 등록
+    addModel('sonnet');
+    addModel('opus');
+    addModel('haiku');
+
+    // --help 출력에 언급된 모델 ID 추출 (예: claude-sonnet-4-5-20250929 등)
+    const helpMatches = helpOutput.match(/\bclaude-(?:opus|sonnet|haiku)-[0-9][a-z0-9.-]*\b/gi) || [];
+    for (const m of helpMatches) {
+      addModel(m.toLowerCase());
+    }
+  }
+
+  // 설치된 claude 실행 파일(JS 번들 또는 단일 바이너리) 내부에서 지원 모델 ID 실시간 스캔
+  try {
+    if (claudePath && claudePath !== 'claude' && fsSync.existsSync(claudePath)) {
+      const realBinPath = fsSync.realpathSync(claudePath);
+      const stat = fsSync.statSync(realBinPath);
+      if (stat.isFile() && stat.size <= 150 * 1024 * 1024) {
+        const rawContent = await fs.readFile(realBinPath, 'latin1');
+        const regex = /\bclaude-(?:opus|sonnet|haiku)-(?:4|5)(?:-[0-9]+)?(?:-\d{8})?\b/g;
+        const foundIds = new Set();
+        let match;
+        while ((match = regex.exec(rawContent)) !== null) {
+          foundIds.add(match[0].toLowerCase());
+        }
+        const sortedIds = Array.from(foundIds).sort((a, b) =>
+          b.localeCompare(a, undefined, { numeric: true })
+        );
+        for (const id of sortedIds) {
+          addModel(id);
+        }
+      }
+    }
+  } catch {
+    // ignore binary read errors
+  }
+
+  if (discoveredMap.size > 0) {
+    return Array.from(discoveredMap.values());
+  }
+
+  return CLAUDE_CLI_FALLBACK_MODELS;
+}
+
 async function listAvailableModels({ aiModule, githubToken }) {
   if (aiModule === 'antigravity') {
     return listAntigravityModels();
+  }
+  if (aiModule === 'claude') {
+    return listClaudeModels();
   }
   return listCopilotModels(githubToken);
 }
@@ -1049,7 +1290,7 @@ async function runAntigravityCliAnalysis(prompt, workDir, aiModel) {
   args.push('--print', prompt, '--disable-slash-commands', '--dangerously-skip-permissions');
 
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       agyPath,
       args,
       {
@@ -1075,6 +1316,51 @@ async function runAntigravityCliAnalysis(prompt, workDir, aiModel) {
         resolve(output);
       }
     );
+    if (child.stdin) {
+      child.stdin.end();
+    }
+  });
+}
+
+// 로컬 Claude CLI (claude)를 사용해 분석 실행
+async function runClaudeCliAnalysis(prompt, workDir, aiModel) {
+  const claudePath = resolveClaudeCliPath();
+  const args = [];
+  if (aiModel && aiModel.trim()) {
+    args.push('--model', aiModel.trim());
+  }
+  args.push('--print', prompt, '--dangerously-skip-permissions');
+
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      claudePath,
+      args,
+      {
+        cwd: workDir,
+        env: getAgyEnv(),
+        timeout: 300000,
+        maxBuffer: 15 * 1024 * 1024,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          return reject(
+            new Error(
+              `Claude CLI 실행 중 오류가 발생했습니다: ${error.message}${
+                stderr ? `\n${stderr}` : ''
+              }`
+            )
+          );
+        }
+        const output = (stdout || '').trim();
+        if (!output) {
+          return reject(new Error('Claude CLI로부터 응답 결과가 비어 있습니다.'));
+        }
+        resolve(output);
+      }
+    );
+    if (child.stdin) {
+      child.stdin.end();
+    }
   });
 }
 
@@ -1102,12 +1388,14 @@ ${query}
 {"exactPhrases": ["..."], "keywords": ["..."]}`;
 
   try {
-    const selectedModule = aiModule === 'antigravity' ? 'antigravity' : 'copilot';
+    const selectedModule = normalizeAiModule(aiModule);
     const trimmedModel = (aiModel && aiModel.trim()) || '';
     let rawOutput = '';
 
     if (selectedModule === 'antigravity') {
       rawOutput = await runAntigravityCliAnalysis(prompt, workDir, trimmedModel);
+    } else if (selectedModule === 'claude') {
+      rawOutput = await runClaudeCliAnalysis(prompt, workDir, trimmedModel);
     } else {
       rawOutput = await runCopilotSdkAnalysis(prompt, githubToken, workDir, trimmedModel);
     }
@@ -1228,7 +1516,7 @@ async function analyzeFigmaWithAi({
     (aiSaveDir && aiSaveDir.trim()) || path.join(app.getPath('home'), 'figma-ai-results');
   await fs.mkdir(targetSaveDir, { recursive: true });
 
-  const selectedModule = aiModule === 'antigravity' ? 'antigravity' : 'copilot';
+  const selectedModule = normalizeAiModule(aiModule);
   const trimmedModel = (aiModel && aiModel.trim()) || '';
 
   // 1단계: 사용자 질의를 AI에게 먼저 보내 핵심 고유 구문(Exact Phrase) 및 유효 키워드를 추출
@@ -1265,6 +1553,8 @@ async function analyzeFigmaWithAi({
   // 4단계: AI 최종 종합 분석 실행
   if (selectedModule === 'antigravity') {
     aiResponseText = await runAntigravityCliAnalysis(prompt, targetSaveDir, trimmedModel);
+  } else if (selectedModule === 'claude') {
+    aiResponseText = await runClaudeCliAnalysis(prompt, targetSaveDir, trimmedModel);
   } else {
     aiResponseText = await runCopilotSdkAnalysis(prompt, githubToken, targetSaveDir, trimmedModel);
   }
@@ -1284,7 +1574,11 @@ async function analyzeFigmaWithAi({
   const filePath = path.join(targetSaveDir, fileName);
 
   const baseModuleLabel =
-    selectedModule === 'antigravity' ? 'Antigravity CLI (`agy`)' : 'GitHub Copilot SDK';
+    selectedModule === 'antigravity'
+      ? 'Antigravity CLI (`agy`)'
+      : selectedModule === 'claude'
+      ? 'Claude CLI (`claude`)'
+      : 'GitHub Copilot SDK';
   const moduleLabel = trimmedModel
     ? `${baseModuleLabel} (${trimmedModel})`
     : baseModuleLabel;
