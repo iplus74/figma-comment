@@ -2,6 +2,8 @@
 const fs = require('fs/promises');
 const fsSync = require('fs');
 const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { app } = require('electron');
 
@@ -1213,14 +1215,183 @@ async function listClaudeModels() {
   return CLAUDE_CLI_FALLBACK_MODELS;
 }
 
-async function listAvailableModels({ aiModule, githubToken }) {
-  if (aiModule === 'antigravity') {
-    return listAntigravityModels();
+function getTodayDateKey() {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function getModelsCacheFilePath() {
+  try {
+    if (app && typeof app.getPath === 'function') {
+      return path.join(app.getPath('userData'), 'ai-models-cache.json');
+    }
+  } catch {
+    // ignore and fallback
   }
-  if (aiModule === 'claude') {
-    return listClaudeModels();
+  return path.join(os.homedir(), '.figma-comment-viewer', 'ai-models-cache.json');
+}
+
+async function readModelsDiskCache() {
+  try {
+    const raw = await fs.readFile(getModelsCacheFilePath(), 'utf-8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
   }
-  return listCopilotModels(githubToken);
+}
+
+async function writeModelsDiskCache(cacheData) {
+  try {
+    const filePath = getModelsCacheFilePath();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify(cacheData, null, 2), 'utf-8');
+  } catch {
+    // ignore disk cache write failures
+  }
+}
+
+function getModelsCacheKey(aiModule, githubToken) {
+  const normalized = normalizeAiModule(aiModule);
+  if (normalized === 'copilot') {
+    const token = sanitizeGithubToken(githubToken || process.env.GITHUB_TOKEN || process.env.GH_TOKEN);
+    const tokenSuffix = token
+      ? crypto.createHash('sha256').update(token).digest('hex').slice(0, 12)
+      : 'default';
+    return `copilot:${tokenSuffix}`;
+  }
+  return normalized;
+}
+
+// 공개 모델 단가 API에서 실시간 1M 토큰당 입/출력 단가 정보를 조회한다.
+async function fetchLivePricingMap() {
+  const pricingMap = new Map();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4000);
+
+  try {
+    const res = await fetch('https://openrouter.ai/api/v1/models', {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    if (!res.ok) return pricingMap;
+
+    const json = await res.json();
+    const list = Array.isArray(json && json.data) ? json.data : [];
+
+    for (const item of list) {
+      if (!item || !item.id || !item.pricing) continue;
+      const promptUsd = Number(item.pricing.prompt);
+      const completionUsd = Number(item.pricing.completion);
+      if (!Number.isFinite(promptUsd) || !Number.isFinite(completionUsd)) continue;
+      if (promptUsd < 0 || completionUsd < 0) continue;
+
+      const inPer1M = (promptUsd * 1000000).toFixed(2);
+      const outPer1M = (completionUsd * 1000000).toFixed(2);
+      const label = `입력 $${inPer1M} / 출력 $${outPer1M} (1M tok)`;
+
+      const fullId = String(item.id).toLowerCase();
+      const shortId = fullId.includes('/') ? fullId.split('/').pop() : fullId;
+      const baseShortId = shortId.split(':')[0];
+      const hyphenatedId = baseShortId.replace(/\./g, '-');
+
+      if (!pricingMap.has(fullId)) pricingMap.set(fullId, label);
+      if (!pricingMap.has(baseShortId)) pricingMap.set(baseShortId, label);
+      if (!pricingMap.has(hyphenatedId)) pricingMap.set(hyphenatedId, label);
+    }
+  } catch {
+    // 네트워크 실패 시 빈 Map 반환 (기존 단가 fallback)
+  } finally {
+    clearTimeout(timer);
+  }
+
+  return pricingMap;
+}
+
+function resolveLivePricing(modelId, livePricingMap) {
+  if (!livePricingMap || livePricingMap.size === 0 || !modelId) return '';
+  const lower = String(modelId).trim().toLowerCase();
+  const noEffort = lower.replace(/-(?:low|medium|high|xhigh|max)$/i, '');
+  const noDate = noEffort.replace(/-\d{8}$/, '');
+
+  const candidates = [
+    lower,
+    lower.replace(/\./g, '-'),
+    noEffort,
+    noEffort.replace(/\./g, '-'),
+    noDate,
+    noDate.replace(/\./g, '-'),
+  ];
+
+  // Claude 별칭(sonnet, opus, haiku)은 최신 계열 ID로 매핑 시도
+  if (lower === 'sonnet') candidates.push('claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-sonnet-4');
+  if (lower === 'opus') candidates.push('claude-opus-4-6', 'claude-opus-4-5', 'claude-opus-4');
+  if (lower === 'haiku') candidates.push('claude-haiku-4-5', 'claude-3-5-haiku');
+
+  for (const key of candidates) {
+    if (livePricingMap.has(key)) {
+      return livePricingMap.get(key);
+    }
+  }
+  return '';
+}
+
+async function listAvailableModels({ aiModule, githubToken, forceRefresh = false }) {
+  const normalizedModule = normalizeAiModule(aiModule);
+  const cacheKey = getModelsCacheKey(normalizedModule, githubToken);
+  const todayKey = getTodayDateKey();
+
+  if (!forceRefresh) {
+    const diskCache = await readModelsDiskCache();
+    const cachedEntry = diskCache[cacheKey];
+    if (
+      cachedEntry &&
+      cachedEntry.date === todayKey &&
+      Array.isArray(cachedEntry.models) &&
+      cachedEntry.models.length > 0
+    ) {
+      return cachedEntry.models;
+    }
+  }
+
+  const fetchModelsPromise =
+    normalizedModule === 'antigravity'
+      ? listAntigravityModels()
+      : normalizedModule === 'claude'
+      ? listClaudeModels()
+      : listCopilotModels(githubToken);
+
+  const [models, livePricingMap] = await Promise.all([
+    fetchModelsPromise,
+    fetchLivePricingMap(),
+  ]);
+
+  const enrichedModels = (Array.isArray(models) ? models : []).map((m) => {
+    const livePricing = resolveLivePricing(m.id, livePricingMap);
+    const finalPricing =
+      normalizedModule === 'copilot'
+        ? m.pricing || livePricing
+        : livePricing || m.pricing || '';
+    return {
+      ...m,
+      pricing: finalPricing,
+    };
+  });
+
+  if (enrichedModels.length > 0) {
+    const diskCache = await readModelsDiskCache();
+    diskCache[cacheKey] = {
+      date: todayKey,
+      updatedAt: Date.now(),
+      models: enrichedModels,
+    };
+    await writeModelsDiskCache(diskCache);
+  }
+
+  return enrichedModels;
 }
 
 // GitHub Copilot SDK를 사용해 분석 실행

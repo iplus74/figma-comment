@@ -8,6 +8,7 @@ const STORAGE_KEYS = {
   aiModelCopilot: 'figma_ai_model_copilot',
   aiModelAntigravity: 'figma_ai_model_antigravity',
   aiModelClaude: 'figma_ai_model_claude',
+  aiModelsCache: 'figma_ai_models_cache',
   githubToken: 'figma_github_token',
   aiSaveDir: 'figma_ai_save_dir',
 };
@@ -41,7 +42,7 @@ function showScreen(name) {
   });
   if (name === 'ai') {
     ensureAiPagesLoaded();
-    loadAiModelsForModule(getAiModule(), true);
+    loadAiModelsForModule(getAiModule(), false);
   }
 }
 
@@ -158,7 +159,7 @@ document.getElementById('settings-form').addEventListener('submit', (e) => {
     state.pages = [];
   }
   if (prevGithubToken !== nextGithubToken) {
-    delete state.modelsCache.copilot;
+    clearCachedModelsForModule('copilot');
   }
   setStatus(settingsStatus, '저장되었습니다.', 'success');
 });
@@ -602,13 +603,81 @@ function renderAiModelOptions(models, selectedModel) {
   }
 }
 
-async function loadAiModelsForModule(moduleValue, forceRefresh = true) {
+function getTodayDateKey() {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function readAllCachedModels() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.aiModelsCache);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function getCachedModelsForModule(moduleValue) {
+  const today = getTodayDateKey();
+  const memEntry = state.modelsCache[moduleValue];
+  if (memEntry && memEntry.date === today && Array.isArray(memEntry.models) && memEntry.models.length > 0) {
+    return memEntry.models;
+  }
+
+  const allCache = readAllCachedModels();
+  const entry = allCache[moduleValue];
+  if (entry && entry.date === today && Array.isArray(entry.models) && entry.models.length > 0) {
+    state.modelsCache[moduleValue] = entry;
+    return entry.models;
+  }
+  return null;
+}
+
+function setCachedModelsForModule(moduleValue, models) {
+  if (!Array.isArray(models) || models.length === 0) return;
+  const entry = {
+    date: getTodayDateKey(),
+    updatedAt: Date.now(),
+    models,
+  };
+  state.modelsCache[moduleValue] = entry;
+  const allCache = readAllCachedModels();
+  allCache[moduleValue] = entry;
+  try {
+    localStorage.setItem(STORAGE_KEYS.aiModelsCache, JSON.stringify(allCache));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+function clearCachedModelsForModule(moduleValue) {
+  delete state.modelsCache[moduleValue];
+  const allCache = readAllCachedModels();
+  if (allCache[moduleValue]) {
+    delete allCache[moduleValue];
+    try {
+      localStorage.setItem(STORAGE_KEYS.aiModelsCache, JSON.stringify(allCache));
+    } catch {
+      // ignore
+    }
+  }
+}
+
+async function loadAiModelsForModule(moduleValue, forceRefresh = false) {
   if (!window.figmaAPI.getAiModels) return;
   const savedModel = localStorage.getItem(getModelStorageKey(moduleValue)) || '';
 
-  if (!forceRefresh && Array.isArray(state.modelsCache[moduleValue])) {
-    renderAiModelOptions(state.modelsCache[moduleValue], savedModel);
-    return;
+  if (!forceRefresh) {
+    const cachedModels = getCachedModelsForModule(moduleValue);
+    if (cachedModels) {
+      renderAiModelOptions(cachedModels, savedModel);
+      return;
+    }
   }
 
   aiModelSelect.disabled = true;
@@ -616,7 +685,7 @@ async function loadAiModelsForModule(moduleValue, forceRefresh = true) {
   try {
     const res = await window.figmaAPI.getAiModels(moduleValue, getGithubToken());
     if (res && res.ok && res.data && Array.isArray(res.data.models)) {
-      state.modelsCache[moduleValue] = res.data.models;
+      setCachedModelsForModule(moduleValue, res.data.models);
       renderAiModelOptions(res.data.models, savedModel);
     } else {
       renderAiModelOptions([], savedModel);
