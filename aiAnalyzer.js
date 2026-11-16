@@ -504,6 +504,7 @@ function extractFigmaContext(fileData, rawComments, searchTermsInput, pageId) {
         groupKey,
         pageName: pageName || '페이지',
         groupName: groupName || '영역',
+        subFrameNames: new Set(),
         textNodes: [],
         threads: [],
         score: 0,
@@ -515,6 +516,22 @@ function extractFigmaContext(fileData, rawComments, searchTermsInput, pageId) {
 
   for (const tn of textNodes) {
     const g = ensureGroup(tn.groupKey, tn.pageName, tn.groupName);
+    if (Array.isArray(tn.ancestorIds)) {
+      for (const aid of tn.ancestorIds) {
+        const meta = nodeMetaMap.get(aid);
+        if (
+          meta &&
+          meta.name &&
+          meta.name !== g.groupName &&
+          (meta.type === 'FRAME' ||
+            meta.type === 'SECTION' ||
+            meta.type === 'COMPONENT' ||
+            meta.type === 'COMPONENT_SET')
+        ) {
+          g.subFrameNames.add(meta.name);
+        }
+      }
+    }
     g.textNodes.push(tn);
   }
 
@@ -547,10 +564,12 @@ function extractFigmaContext(fileData, rawComments, searchTermsInput, pageId) {
     for (const group of allGroups) {
       let groupExactScore = 0;
       let groupScore = 0;
-      const groupHeaderLower = `${group.pageName} ${group.groupName}`.toLowerCase();
+      const matchedKeywords = new Set();
+      const subFrameNamesText = Array.from(group.subFrameNames || []).join(' ');
+      const groupHeaderLower = `${group.pageName} ${group.groupName} ${subFrameNamesText}`.toLowerCase();
       const groupHeaderNoSpace = groupHeaderLower.replace(/\s+/g, '');
 
-      // 그룹 헤더 일치 검사
+      // 그룹 헤더(페이지명, 최상위 그룹명, 하위 프레임 라벨) 일치 검사
       for (const ep of exactPhrases) {
         if (groupHeaderLower.includes(ep) || groupHeaderNoSpace.includes(ep)) {
           groupExactScore += 50;
@@ -559,7 +578,8 @@ function extractFigmaContext(fileData, rawComments, searchTermsInput, pageId) {
       }
       for (const kw of keywords) {
         if (groupHeaderLower.includes(kw)) {
-          groupScore += 5;
+          groupScore += 15;
+          matchedKeywords.add(kw);
         }
       }
 
@@ -579,6 +599,7 @@ function extractFigmaContext(fileData, rawComments, searchTermsInput, pageId) {
         for (const kw of keywords) {
           if (textLower.includes(kw)) {
             tnScore += 3;
+            matchedKeywords.add(kw);
           }
         }
 
@@ -607,6 +628,7 @@ function extractFigmaContext(fileData, rawComments, searchTermsInput, pageId) {
         for (const kw of keywords) {
           if (commentLower.includes(kw)) {
             thScore += 3;
+            matchedKeywords.add(kw);
           }
         }
 
@@ -614,6 +636,11 @@ function extractFigmaContext(fileData, rawComments, searchTermsInput, pageId) {
         th.matchScore = thScore;
         groupExactScore += thExact;
         groupScore += thScore;
+      }
+
+      // 서로 다른 키워드가 2개 이상 다양하게 매칭된 그룹에 보너스 부여
+      if (matchedKeywords.size >= 2) {
+        groupScore += matchedKeywords.size * 15;
       }
 
       group.exactScore = groupExactScore;
@@ -776,6 +803,19 @@ function buildAiAnalysisPrompt(query, fileKey, context) {
     lines.push(
       `### 관련 화면: [${group.pageName} > ${group.groupName}](${groupUrl}) (화면 ID: \`${group.groupKey}\`)${exactBadge}${matchBadge}`
     );
+
+    if (group.subFrameNames && group.subFrameNames.size > 0) {
+      const subFrames = Array.from(group.subFrameNames);
+      const kwList = context.keywords || [];
+      const sortedSubFrames = [...subFrames].sort((a, b) => {
+        const aHit = kwList.some((kw) => a.toLowerCase().includes(kw)) ? 1 : 0;
+        const bHit = kwList.some((kw) => b.toLowerCase().includes(kw)) ? 1 : 0;
+        return bHit - aHit;
+      });
+      const shown = sortedSubFrames.slice(0, 15);
+      const extra = sortedSubFrames.length > 15 ? ` 외 ${sortedSubFrames.length - 15}개` : '';
+      lines.push(`- **포함된 하위 프레임/컴포넌트**: ${shown.join(', ')}${extra}`);
+    }
 
     // 그룹 내 텍스트 노드 정리 (필수 구문 일치 > 키워드 매칭 순 우선, 동일 텍스트 중복 축약)
     const nodesToRender = [...group.textNodes].sort(
@@ -1553,8 +1593,9 @@ ${query}
 
 [추출 지침]
 1. "exactPhrases": 사용자가 따옴표('...' 또는 "...")로 감싼 단어/구문이나 반드시 어순 그대로 일치해야 하는 고유 명칭 (예: ["보증금 상태"]). 없으면 빈 배열 []
-2. "keywords": Figma 화면의 텍스트 노드 또는 댓글에서 찾아야 할 핵심 키워드 목록 (예: ["보증금", "상태", "환급", "납부", "반환", "차감", "예치금", "deposit"]).
-   - 절대 금지: '정보', '내용', '정리', '분석', '요약', '주세요', '알려줘', '대한', '관련' 같은 일반 지시어, 서술어, 불용어는 절대 포함하지 마세요.
+2. "keywords": Figma 화면의 Frame 라벨, 텍스트 노드, 댓글에서 찾아야 할 핵심 키워드 목록 (예: ["보증금", "상태", "환급", "납부", "반환", "차감", "예치금", "deposit"]).
+   - **한·영 교차 키워드 필수 포함**: Figma의 Frame 이름이나 경로(예: \`email/booking/confirmed\`)는 영문으로 작성된 경우가 많으므로, 한글 키워드에 대응하는 **영문 동의어·유사어·어근**을 반드시 함께 포함하세요 (예: 예약 → booking, reservation, reserve / 완료·확정 → confirm, confirmed, complete / 이메일 → email, mail / 템플릿 → template). 반대로 영문 키워드가 있다면 대응하는 한글 키워드도 포함하세요.
+   - 절대 금지: '정보', '내용', '정리', '분석', '요약', '주세요', '알려줘', '대한', '관련', '있나요', '있는지' 같은 일반 지시어, 서술어, 불용어는 절대 포함하지 마세요.
 3. 다른 설명 없이 오직 순수한 JSON 객체 하나만 출력하세요:
 {"exactPhrases": ["..."], "keywords": ["..."]}`;
 
