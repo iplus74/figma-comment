@@ -20,4 +20,11 @@ contextBridge.exposeInMainWorld('figmaAPI', {
   getAiModels: (aiModule, githubToken) =>
     ipcRenderer.invoke('ai:getModels', { aiModule, githubToken }),
   searchAndAnalyzeAi: (payload) => ipcRenderer.invoke('ai:searchAndAnalyze', payload),
+  watchAiFile: (filePath) => ipcRenderer.invoke('ai:watchFile', { filePath }),
+  unwatchAiFile: () => ipcRenderer.invoke('ai:unwatchFile'),
+  onAiFileReloaded: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('ai:fileReloaded', handler);
+    return () => ipcRenderer.removeListener('ai:fileReloaded', handler);
+  },
 });

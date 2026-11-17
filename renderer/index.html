@@ -5,6 +5,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline';" />
   <title>Figma Comment Viewer</title>
   <link rel="icon" href="icon.svg" />
+  <link rel="stylesheet" href="vendor/highlight-github.min.css" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -175,11 +176,21 @@
     <div class="modal-panel">
       <div class="modal-header">
         <h3 id="ai-modal-title" class="modal-title">AI 데이터 분석 결과</h3>
-        <button type="button" id="btn-ai-modal-close-x" class="modal-close-x" aria-label="닫기">✕</button>
+        <div class="modal-header-actions">
+          <label class="ai-autoreload-label" title="저장된 .md 파일 변경 시 자동으로 다시 불러옵니다">
+            <input type="checkbox" id="ai-autoreload-toggle" checked />
+            <span>자동 새로고침</span>
+          </label>
+          <button type="button" id="btn-ai-toc-toggle" class="btn-secondary btn-sm">목차</button>
+          <button type="button" id="btn-ai-modal-close-x" class="modal-close-x" aria-label="닫기">✕</button>
+        </div>
       </div>
       <div id="ai-modal-meta" class="modal-meta"></div>
-      <div class="modal-body">
-        <div id="ai-modal-content" class="markdown-body"></div>
+      <div class="modal-body-layout">
+        <aside id="ai-toc-panel" class="ai-toc-panel hidden" aria-label="목차"></aside>
+        <div id="ai-modal-body" class="modal-body">
+          <div id="ai-modal-content" class="markdown-body"></div>
+        </div>
       </div>
       <div class="modal-footer">
         <div class="modal-footer-left">
@@ -191,6 +202,7 @@
     </div>
   </div>
 
+  <script src="vendor/mermaid.min.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

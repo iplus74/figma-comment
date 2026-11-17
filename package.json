@@ -54,6 +54,12 @@
   },
   "dependencies": {
     "@github/copilot-sdk": "^1.0.29",
-    "marked": "^18.1.3"
+    "highlight.js": "^11.12.0",
+    "marked": "^18.1.3",
+    "marked-emoji": "^3.0.0",
+    "marked-highlight": "^2.2.4",
+    "mathjax-full": "^3.2.1",
+    "mermaid": "^12.3.0",
+    "node-emoji": "^2.2.0"
   }
 }

@@ -574,7 +574,11 @@ const aiSearchStatus = document.getElementById('ai-search-status');
 
 const aiResultModal = document.getElementById('ai-result-modal');
 const aiModalMeta = document.getElementById('ai-modal-meta');
+const aiModalBody = document.getElementById('ai-modal-body');
 const aiModalContent = document.getElementById('ai-modal-content');
+const aiTocPanel = document.getElementById('ai-toc-panel');
+const btnAiTocToggle = document.getElementById('btn-ai-toc-toggle');
+const aiAutoreloadToggle = document.getElementById('ai-autoreload-toggle');
 const btnAiModalCloseX = document.getElementById('btn-ai-modal-close-x');
 const btnAiModalClose = document.getElementById('btn-ai-modal-close');
 const btnAiCopy = document.getElementById('btn-ai-copy');
@@ -750,19 +754,145 @@ async function ensureAiPagesLoaded() {
   }
 }
 
-function openAiResultModal(resultData) {
-  if (!resultData) return;
-  const meta = resultData.meta || {};
+let mermaidInitialized = false;
+let mermaidRenderSeq = 0;
+
+function initMermaidIfNeeded() {
+  if (mermaidInitialized) return true;
+  if (typeof window.mermaid === 'undefined') return false;
+  window.mermaid.initialize({
+    startOnLoad: false,
+    theme: 'default',
+    securityLevel: 'strict',
+  });
+  mermaidInitialized = true;
+  return true;
+}
+
+async function renderMermaidBlocks(container) {
+  if (!container || !initMermaidIfNeeded()) return;
+  const codeBlocks = container.querySelectorAll('pre > code.language-mermaid');
+  for (const codeEl of codeBlocks) {
+    const preEl = codeEl.parentElement;
+    if (!preEl) continue;
+    const diagramSource = (codeEl.textContent || '').trim();
+    if (!diagramSource) continue;
+    try {
+      const renderId = `mermaid-svg-${++mermaidRenderSeq}`;
+      const { svg } = await window.mermaid.render(renderId, diagramSource);
+      const wrapper = document.createElement('div');
+      wrapper.className = 'mermaid-diagram';
+      wrapper.innerHTML = svg;
+      preEl.replaceWith(wrapper);
+    } catch {
+      // 문법 오류 시 원본 코드 블록 유지
+    }
+  }
+}
+
+function renderAiToc(toc) {
+  if (!aiTocPanel) return;
+  const items = Array.isArray(toc) ? toc : [];
+  if (items.length === 0) {
+    aiTocPanel.innerHTML = '<div class="ai-toc-title">목차</div><div class="ai-toc-empty">표시할 목차가 없습니다.</div>';
+    return;
+  }
+  const listHtml = items
+    .map(
+      (item) =>
+        `<li class="ai-toc-item level-${item.level}"><a href="#${escapeHtml(item.id)}">${escapeHtml(item.text)}</a></li>`
+    )
+    .join('');
+  aiTocPanel.innerHTML = `<div class="ai-toc-title">목차 (${items.length})</div><ul class="ai-toc-list">${listHtml}</ul>`;
+}
+
+function scrollToAiHeading(headingId) {
+  if (!headingId) return;
+  const escaped = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(headingId) : headingId;
+  const target = aiModalContent.querySelector(`#${escaped}`);
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+async function renderAiModalBody(html, toc) {
+  aiModalContent.innerHTML = html || '';
+  renderAiToc(toc);
+  await renderMermaidBlocks(aiModalContent);
+}
+
+function renderAiModalMeta(resultData, reloadedAtText) {
+  const meta = (resultData && resultData.meta) || {};
+  const reloadBadge = reloadedAtText ? ` <span style="color:#006644;font-weight:600;">(자동 갱신됨 ${escapeHtml(reloadedAtText)})</span>` : '';
   aiModalMeta.innerHTML = `
     <div><strong>AI 모듈:</strong> ${escapeHtml(meta.moduleLabel || meta.aiModule || '')} | <strong>파일:</strong> ${escapeHtml(meta.fileName || '')} | <strong>페이지:</strong> ${escapeHtml(meta.pageName || '')} | <strong>텍스트 노드:</strong> ${meta.includedTextCount ?? 0}/${meta.totalTextCount ?? 0}건 | <strong>댓글 쓰레드:</strong> ${meta.includedThreadCount ?? 0}/${meta.totalThreadCount ?? 0}건</div>
-    <div><strong>저장 경로:</strong> <code>${escapeHtml(resultData.filePath || '')}</code></div>
+    <div><strong>저장 경로:</strong> <code>${escapeHtml((resultData && resultData.filePath) || '')}</code>${reloadBadge}</div>
   `;
-  aiModalContent.innerHTML = resultData.html || '';
+}
+
+function syncAiFileWatcher(filePath) {
+  if (!window.figmaAPI || !window.figmaAPI.watchAiFile) return;
+  if (aiAutoreloadToggle && aiAutoreloadToggle.checked && filePath) {
+    window.figmaAPI.watchAiFile(filePath);
+  } else if (window.figmaAPI.unwatchAiFile) {
+    window.figmaAPI.unwatchAiFile();
+  }
+}
+
+async function openAiResultModal(resultData) {
+  if (!resultData) return;
+  renderAiModalMeta(resultData, '');
   aiResultModal.classList.remove('hidden');
+  if (aiModalBody) aiModalBody.scrollTop = 0;
+  await renderAiModalBody(resultData.html || '', resultData.toc || []);
+  syncAiFileWatcher(resultData.filePath);
 }
 
 function closeAiResultModal() {
   aiResultModal.classList.add('hidden');
+  if (window.figmaAPI && window.figmaAPI.unwatchAiFile) {
+    window.figmaAPI.unwatchAiFile();
+  }
+}
+
+btnAiTocToggle.addEventListener('click', () => {
+  if (aiTocPanel) {
+    aiTocPanel.classList.toggle('hidden');
+  }
+});
+
+aiAutoreloadToggle.addEventListener('change', () => {
+  if (!aiResultModal.classList.contains('hidden') && state.lastAiResult) {
+    syncAiFileWatcher(state.lastAiResult.filePath);
+  }
+});
+
+if (aiTocPanel) {
+  aiTocPanel.addEventListener('click', (e) => {
+    const anchor = e.target.closest('a[href^="#"]');
+    if (!anchor) return;
+    e.preventDefault();
+    const targetId = decodeURIComponent(anchor.getAttribute('href').slice(1));
+    scrollToAiHeading(targetId);
+  });
+}
+
+if (window.figmaAPI && window.figmaAPI.onAiFileReloaded) {
+  window.figmaAPI.onAiFileReloaded(async (payload) => {
+    if (aiResultModal.classList.contains('hidden') || !state.lastAiResult) return;
+    if (payload.filePath !== state.lastAiResult.filePath) return;
+    const prevScrollTop = aiModalBody ? aiModalBody.scrollTop : 0;
+    state.lastAiResult = {
+      ...state.lastAiResult,
+      markdown: payload.markdown,
+      html: payload.html,
+      toc: payload.toc || [],
+    };
+    const nowTime = new Date().toLocaleTimeString('ko-KR', { hour12: false });
+    renderAiModalMeta(state.lastAiResult, nowTime);
+    await renderAiModalBody(payload.html || '', payload.toc || []);
+    if (aiModalBody) aiModalBody.scrollTop = prevScrollTop;
+  });
 }
 
 btnAiModalCloseX.addEventListener('click', closeAiResultModal);
@@ -778,6 +908,11 @@ aiModalContent.addEventListener('click', (e) => {
   const anchor = e.target.closest('a[href]');
   if (!anchor) return;
   const href = anchor.getAttribute('href');
+  if (href && href.startsWith('#')) {
+    e.preventDefault();
+    scrollToAiHeading(decodeURIComponent(href.slice(1)));
+    return;
+  }
   if (href && /^https?:\/\//i.test(href)) {
     e.preventDefault();
     window.figmaAPI.openExternal(href);

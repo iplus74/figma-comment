@@ -85,7 +85,7 @@ figma-comment/
 - `npm run dist:mac` : macOS `.dmg` 설치 이미지 생성
 - `npm run dist:win` : Windows NSIS 설치 프로그램 생성
 - `npm run dist:linux` : Linux `AppImage` 패키지 생성
-- `npm run dist:all` : macOS / Windows / Linux 전체 빌드
+- `npm run dist:all` : macOS / Windows / Linux 전체 빌드fig
 
 ---
 

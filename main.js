@@ -2,8 +2,11 @@
 // Figma REST API 호출을 담당하고, 렌더러 프로세스와는 IPC 로 통신한다.
 const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs/promises');
+const fsSync = require('fs');
 const { exec } = require('child_process');
 const aiAnalyzer = require('./aiAnalyzer');
+const { renderMarkdown } = require('./markdownRenderer');
 
 const FIGMA_API_BASE = 'https://api.figma.com/v1';
 
@@ -37,6 +40,7 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  stopAiFileWatcher();
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -208,34 +212,101 @@ ipcMain.handle('app:openPath', async (_event, { targetPath, showInFolder }) => {
   }
 });
 
-let markedParser = null;
-async function getMarkedParser() {
-  if (!markedParser) {
-    const mod = await import('marked');
-    markedParser = mod.marked || mod;
-    if (typeof markedParser.use === 'function') {
-      markedParser.use({
-        renderer: {
-          link(item) {
-            // marked v4+ 객체 형태 { href, title, text, tokens } 또는 v3 이전 (href, title, text) 대응
-            const href = typeof item === 'object' && item !== null ? item.href : arguments[0];
-            const title = typeof item === 'object' && item !== null ? item.title : arguments[1];
-            const text = typeof item === 'object' && item !== null ? item.text : arguments[2];
-            const titleAttr = title ? ` title="${title}"` : '';
-            return `<a href="${href || ''}" target="_blank" rel="noopener noreferrer"${titleAttr}>${text || ''}</a>`;
-          },
-        },
-      });
-    }
-    if (typeof markedParser.setOptions === 'function') {
-      markedParser.setOptions({
-        gfm: true,
-        breaks: true,
-      });
-    }
+let aiFileWatcher = null;
+let aiWatchDebounceTimer = null;
+let aiWatchedFilePath = '';
+
+function stopAiFileWatcher() {
+  if (aiWatchDebounceTimer) {
+    clearTimeout(aiWatchDebounceTimer);
+    aiWatchDebounceTimer = null;
   }
-  return markedParser;
+  if (aiFileWatcher) {
+    try {
+      aiFileWatcher.close();
+    } catch {
+      // ignore
+    }
+    aiFileWatcher = null;
+  }
+  aiWatchedFilePath = '';
 }
+
+function startAiFileWatcher(targetPath) {
+  stopAiFileWatcher();
+  if (!targetPath || !fsSync.existsSync(targetPath)) {
+    return { ok: false, error: '감시할 파일이 존재하지 않습니다.' };
+  }
+
+  aiWatchedFilePath = targetPath;
+  let lastContent = '';
+  try {
+    lastContent = fsSync.readFileSync(targetPath, 'utf8');
+  } catch {
+    lastContent = '';
+  }
+
+  const triggerReload = () => {
+    if (aiWatchDebounceTimer) clearTimeout(aiWatchDebounceTimer);
+    aiWatchDebounceTimer = setTimeout(async () => {
+      if (!aiWatchedFilePath || aiWatchedFilePath !== targetPath) return;
+      try {
+        const markdown = await fs.readFile(targetPath, 'utf8');
+        if (markdown === lastContent) return;
+        lastContent = markdown;
+        const { html, toc } = await renderMarkdown(markdown);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('ai:fileReloaded', {
+            filePath: targetPath,
+            markdown,
+            html,
+            toc,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      } catch {
+        // 에디터 저장 중 일시적 접근 오류 무시
+      }
+    }, 150);
+  };
+
+  const attachWatcher = () => {
+    if (aiFileWatcher) {
+      try {
+        aiFileWatcher.close();
+      } catch {
+        // ignore
+      }
+    }
+    aiFileWatcher = fsSync.watch(targetPath, (eventType) => {
+      triggerReload();
+      // atomic save(rename) 시 새 inode에 watcher 재연결
+      if (eventType === 'rename' && aiWatchedFilePath === targetPath && fsSync.existsSync(targetPath)) {
+        setTimeout(() => {
+          if (aiWatchedFilePath === targetPath && fsSync.existsSync(targetPath)) {
+            try {
+              attachWatcher();
+            } catch {
+              // ignore
+            }
+          }
+        }, 100);
+      }
+    });
+  };
+
+  attachWatcher();
+  return { ok: true };
+}
+
+ipcMain.handle('ai:watchFile', (_event, { filePath }) => {
+  return startAiFileWatcher(filePath);
+});
+
+ipcMain.handle('ai:unwatchFile', () => {
+  stopAiFileWatcher();
+  return { ok: true };
+});
 
 // 파일 내 페이지(CANVAS) 목록 조회 (depth=1 로 가볍게 조회)
 ipcMain.handle('figma:getPages', async (_event, { token, fileKey }) => {
@@ -349,9 +420,11 @@ ipcMain.handle(
       });
 
       let html = '';
+      let toc = [];
       try {
-        const parser = await getMarkedParser();
-        html = parser.parse(analysisResult.markdown || '');
+        const rendered = await renderMarkdown(analysisResult.markdown || '');
+        html = rendered.html;
+        toc = rendered.toc;
       } catch {
         html = `<pre>${analysisResult.markdown || ''}</pre>`;
       }
@@ -361,6 +434,7 @@ ipcMain.handle(
         data: {
           ...analysisResult,
           html,
+          toc,
         },
       };
     } catch (err) {
